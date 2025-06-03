@@ -1,4 +1,5 @@
 #ifndef __ASSEMBLER__
+#define PTE_S (1L << 8)
 
 // which hart (core) is this?
 static inline uint64

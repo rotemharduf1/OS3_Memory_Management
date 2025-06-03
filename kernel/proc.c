@@ -681,3 +681,17 @@ procdump(void)
     printf("\n");
   }
 }
+
+//task1
+struct proc*
+get_proc_by_pid(int pid) {
+    struct proc *p;
+
+    for(p = proc; p < &proc[NPROC]; p++) {
+        if(p->pid == pid && p->state != UNUSED) {
+            return p;
+        }
+    }
+
+    return 0; // not found
+}

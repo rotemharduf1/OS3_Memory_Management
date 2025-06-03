@@ -36,3 +36,6 @@ entry("getpid");
 entry("sbrk");
 entry("sleep");
 entry("uptime");
+#task1
+entry("map_shared_pages");
+entry("unmap_shared_pages");

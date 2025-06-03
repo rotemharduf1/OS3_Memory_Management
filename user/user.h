@@ -39,3 +39,7 @@ void free(void*);
 int atoi(const char*);
 int memcmp(const void *, const void *, uint);
 void *memcpy(void *, const void *, uint);
+//task1
+int map_shared_pages(void* addr, int size, int pid);
+int unmap_shared_pages(void* addr, int size);
+
