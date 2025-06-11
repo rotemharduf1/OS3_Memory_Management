@@ -451,7 +451,12 @@ map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, ui
 
   uint64 start = PGROUNDDOWN(src_va);
   uint64 end = PGROUNDUP(src_va + size);
-  uint64 dst_base = 0x500000;  // כתובת קבועה בתהליך היעד
+  uint64 dst_base = start;
+
+  uint64 num_pages = (end - start) / PGSIZE;
+
+  uvmunmap(dst_proc->pagetable, dst_base, num_pages, 0);
+
   uint64 dst_va = dst_base;
 
   for (uint64 va = start; va < end; va += PGSIZE, dst_va += PGSIZE) {
@@ -466,12 +471,12 @@ map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, ui
       return (uint64)-1;
   }
 
-  // 🛡 עדכון sz של תהליך היעד
-  if (dst_proc->sz < dst_base + (end - start))
-    dst_proc->sz = dst_base + (end - start);
+  if (dst_proc->sz < dst_va)
+    dst_proc->sz = dst_va;
 
-  return dst_base + (src_va - start); // מחזיר כתובת עם offset נכון
+  return src_va;
 }
+
 
 
 uint64
@@ -486,7 +491,7 @@ unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
     pte_t* pte = walk(p->pagetable, va, 0);
     if (!pte || !(*pte & PTE_V)) {
       printf("unmap_shared_pages: skipping unmapped va %p\n", va);
-      continue;  // ⬅ לא מחזיר שגיאה ולא קורא ל-uvmunmap
+      continue;
     }
 
     int is_shared = (*pte & PTE_S) != 0;

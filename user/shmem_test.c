@@ -5,7 +5,6 @@
 #define PGSIZE 4096
 #define SHARED_ADDR ((char*)0x500000)
 
-// הצהרות על קריאות מערכת
 int map_shared_pages(void* addr, int size, int pid);
 int unmap_shared_pages(void* addr, int size);
 
@@ -18,8 +17,7 @@ main(int argc, char *argv[])
     int child_pid = fork();
 
     if (child_pid == 0) {
-        // ----------- CHILD -----------
-        sleep(10); // מחכה שהורה יסיים מיפוי
+        sleep(10);
 
         printf("Child: message from parent: %s\n", buf);
 
@@ -27,7 +25,6 @@ main(int argc, char *argv[])
         printf("Child: wrote message\n");
 
         if (argc < 2 || strcmp(argv[1], "nounmap") != 0) {
-            // 🛠 ודא שהכתובת חוקית בטבלת העמודים
             uint64 current_brk = (uint64)sbrk(0);
             uint64 target_end = (uint64)SHARED_ADDR + shared_size;
             if (current_brk < target_end)
@@ -42,9 +39,6 @@ main(int argc, char *argv[])
         exit(0);
 
     } else {
-        // ----------- PARENT -----------
-
-        // 🛠 הקצאה חוקית של הדף לפני מיפוי
         uint64 current_brk = (uint64)sbrk(0);
         uint64 target_end = (uint64)SHARED_ADDR + shared_size;
         if (current_brk < target_end)
@@ -62,7 +56,7 @@ main(int argc, char *argv[])
         strcpy(buf, "Hi child!");
         printf("Parent: wrote message\n");
 
-        wait(0); // מחכה לסיום הילד
+        wait(0);
 
         printf("Parent: child exited\n");
         printf("Parent: message from child: %s\n", buf);

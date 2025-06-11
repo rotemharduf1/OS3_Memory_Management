@@ -2,107 +2,86 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 
-typedef unsigned int   uint32_t;
-typedef unsigned short uint16_t;
-
 #define PGSIZE 4096
-#define NUM_CHILDREN 4
-#define MAX_MSG_LEN 64
+#define SHARED_ADDR ((char*)0x800000)
+#define MAX_CHILDREN 4
+#define HEADER_SIZE 4
 
-// Declare shared memory syscall
 int map_shared_pages(void* addr, int size, int pid);
 
-// Align to 4-byte boundary
-char* align4(char* ptr) {
-    return (char*)(((uint64)ptr + 3) & ~3);
-}
+void write_log(char *buffer, int child_index, const char *message) {
+    int len = strlen(message);
+    char *p = buffer;
 
-// Construct a message like "[child 2] hello!"
-void build_message(int index, char* msg) {
-    // start with a template
-    strcpy(msg, "[child X] hello!");
-    msg[7] = '0' + index;  // replace 'X' with digit
-}
+    while (1) {
+        p = (char*)(((uint64)p + 3) & ~3);  // align to 4 bytes
 
-// Child log writer
-void child_log(int index, char* shared_buf) {
-    char* ptr = shared_buf;
-    char msg[MAX_MSG_LEN];
-    build_message(index, msg);
-    int len = strlen(msg);
+        if ((p + HEADER_SIZE + len) >= buffer + PGSIZE)
+            break;
 
-    while ((uint64)(ptr + 4 + len) <= (uint64)(shared_buf + PGSIZE)) {
-        uint32_t* header = (uint32_t*)ptr;
-        uint32_t new_header = (index << 16) | len;
+        uint32 *header = (uint32*)p;
+        uint32 new_header = (child_index << 16) | len;
 
         if (__sync_val_compare_and_swap(header, 0, new_header) == 0) {
-            memcpy(ptr + 4, msg, len);
-            return;
+            memmove(p + HEADER_SIZE, message, len);
+            break;
+        } else {
+            p += HEADER_SIZE + len;
         }
-
-        ptr += 4 + len;
-        ptr = align4(ptr);
     }
 
-    printf("Child %d: buffer full, couldn't log\n", index);
+    exit(0);
 }
 
-// Parent log reader
-void read_logs(char* shared_buf) {
-    char* ptr = shared_buf;
+// Parent reads messages from buffer
+void read_logs(char *buffer) {
+    char *p = buffer;
 
-    while ((uint64)(ptr + 4) <= (uint64)(shared_buf + PGSIZE)) {
-        uint32_t header = *(uint32_t*)ptr;
+    while (p < buffer + PGSIZE) {
+        p = (char*)(((uint64)p + 3) & ~3);
+
+        uint32 header = *(uint32*)p;
         if (header == 0)
             break;
 
         int index = header >> 16;
         int len = header & 0xFFFF;
 
-        if (len == 0 || len > MAX_MSG_LEN)
-            break;
+        printf("From child %d: ", index);
+        write(1, p + HEADER_SIZE, len);
+        write(1, "\n", 1);
 
-        char msg[MAX_MSG_LEN + 1];
-        memcpy(msg, ptr + 4, len);
-        msg[len] = '\0';
-
-        printf("Parent: message from child %d: %s\n", index, msg);
-
-        ptr += 4 + len;
-        ptr = align4(ptr);
+        p += HEADER_SIZE + len;
     }
 }
 
-// Main function
-int main(int argc, char *argv[]) {
-    char* shared_buf = malloc(PGSIZE);
-    if (!shared_buf) {
-        printf("Parent: malloc failed\n");
-        exit(1);
-    }
-    memset(shared_buf, 0, PGSIZE);
+int
+main(int argc, char *argv[])
+{
+    char *shared = SHARED_ADDR;
 
-    for (int i = 0; i < NUM_CHILDREN; i++) {
+    uint64 current_brk = (uint64)sbrk(0);
+    uint64 target = (uint64)shared + PGSIZE;
+    if (current_brk < target)
+        sbrk(target - current_brk);
+    memset(shared, 0, PGSIZE);
+
+    for (int i = 0; i < MAX_CHILDREN; i++) {
         int pid = fork();
         if (pid == 0) {
-            sleep(10); // Wait for parent to map
-            child_log(i, shared_buf);
-            exit(0);
-        } else if (pid > 0) {
-            if (map_shared_pages(shared_buf, PGSIZE, pid) < 0) {
-                printf("Parent: failed to map to child %d\n", pid);
-            }
+            sleep(10);
+            write_log(shared, i, "Hello from child");
         } else {
-            printf("Parent: fork failed\n");
-            exit(1);
+            if (map_shared_pages(shared, PGSIZE, pid) == (uint64)-1) {
+                printf("Mapping to child %d failed\n", pid);
+                kill(pid);
+            }
         }
     }
 
-    for (int i = 0; i < NUM_CHILDREN; i++)
+    for (int i = 0; i < MAX_CHILDREN; i++)
         wait(0);
 
-    printf("\nParent: all children exited. Reading logs:\n");
-    read_logs(shared_buf);
-
+    read_logs(shared);
     exit(0);
 }
