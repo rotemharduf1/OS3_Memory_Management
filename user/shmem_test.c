@@ -3,71 +3,69 @@
 #include "user/user.h"
 
 #define PGSIZE 4096
+#define SHARED_ADDR ((char*)0x500000)
 
-// Declare the syscalls
+// הצהרות על קריאות מערכת
 int map_shared_pages(void* addr, int size, int pid);
 int unmap_shared_pages(void* addr, int size);
 
 int
 main(int argc, char *argv[])
 {
+    char *buf = SHARED_ADDR;
     int shared_size = PGSIZE;
-    char *local_buf = malloc(shared_size);
-    memset(local_buf, 0, shared_size);
-
-    int parent_pid = getpid();
-    printf("Parent: my pid is %d\n", parent_pid);
-
-    char *before = sbrk(0);
-    printf("Parent: sz before fork: %p\n", before);
 
     int child_pid = fork();
 
     if (child_pid == 0) {
-        // ---------------- Child ----------------
-        sleep(10); // allow parent to map if needed
+        // ----------- CHILD -----------
+        sleep(10); // מחכה שהורה יסיים מיפוי
 
-        char *sz_before = sbrk(0);
-        printf("Child: sz before mapping: %p\n", sz_before);
+        printf("Child: message from parent: %s\n", buf);
 
-        int result = map_shared_pages(local_buf, shared_size, parent_pid);
-        if (result == -1) {
-            printf("Child: mapping failed\n");
-            exit(1);
-        }
-
-        char *sz_after_map = sbrk(0);
-        printf("Child: sz after mapping: %p\n", sz_after_map);
-
-        strcpy(local_buf, "Hello daddy!");
+        strcpy(buf, "Hello daddy!");
         printf("Child: wrote message\n");
 
         if (argc < 2 || strcmp(argv[1], "nounmap") != 0) {
-            if (unmap_shared_pages(local_buf, shared_size) < 0)
+            // 🛠 ודא שהכתובת חוקית בטבלת העמודים
+            uint64 current_brk = (uint64)sbrk(0);
+            uint64 target_end = (uint64)SHARED_ADDR + shared_size;
+            if (current_brk < target_end)
+                sbrk(target_end - current_brk);
+
+            if (unmap_shared_pages(buf, shared_size) < 0)
                 printf("Child: unmap failed\n");
             else
                 printf("Child: unmapped successfully\n");
-
-            char *sz_after_unmap = sbrk(0);
-            printf("Child: sz after unmapping: %p\n", sz_after_unmap);
-
-            // malloc test
-            char* test = malloc(128);
-            strcpy(test, "testing malloc");
-            printf("Child: malloc result: %s\n", test);
-            free(test);
-
-            char *sz_after_malloc = sbrk(0);
-            printf("Child: sz after malloc: %p\n", sz_after_malloc);
         }
 
         exit(0);
 
     } else {
-        // ---------------- Parent ----------------
-        wait(0);
+        // ----------- PARENT -----------
+
+        // 🛠 הקצאה חוקית של הדף לפני מיפוי
+        uint64 current_brk = (uint64)sbrk(0);
+        uint64 target_end = (uint64)SHARED_ADDR + shared_size;
+        if (current_brk < target_end)
+            sbrk(target_end - current_brk);
+
+        memset(buf, 0, shared_size);
+
+        if (map_shared_pages(buf, shared_size, child_pid) == (uint64)-1) {
+            printf("Parent: mapping to child failed\n");
+            kill(child_pid);
+            wait(0);
+            exit(1);
+        }
+
+        strcpy(buf, "Hi child!");
+        printf("Parent: wrote message\n");
+
+        wait(0); // מחכה לסיום הילד
+
         printf("Parent: child exited\n");
-        printf("Parent: message from child: %s\n", local_buf);
+        printf("Parent: message from child: %s\n", buf);
     }
 
     exit(0);

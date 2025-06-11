@@ -157,6 +157,29 @@ QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
 ifndef CPUS
 CPUS := 3
 endif
+#
+#QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
+##QEMUOPTS += -global virtio-mmio.force-legacy=false
+#QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
+#QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+#
+#qemu: $K/kernel fs.img
+#	$(QEMU) $(QEMUOPTS)
+#
+#.gdbinit: .gdbinit.tmpl-riscv
+#	sed "s/:1234/:$(GDBPORT)/" < $^ > $@
+#
+#qemu-gdb: $K/kernel .gdbinit fs.img
+#	@echo "*** Now run 'gdb' in another window." 1>&2
+#	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+#
+#build: # build container
+#	@echo "Building devcontainer"
+#	docker build -f .devcontainer/Dockerfile -t xv6-dev .
+#
+#run: # run container
+#	@echo "Running devcontainer"
+#	docker run -it --rm -v $(shell pwd):/workspace -w /workspace xv6-dev /bin/bash
 
 QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 QEMUOPTS += -global virtio-mmio.force-legacy=false
@@ -173,3 +196,11 @@ qemu-gdb: $K/kernel .gdbinit fs.img
 	@echo "*** Now run 'gdb' in another window." 1>&2
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
+build: # build container
+	@echo "Building devcontainer"
+	docker build -f .devcontainer/Dockerfile -t xv6-dev .
+
+
+run: # run container
+	@echo "Running devcontainer"
+	docker run -it --rm -v $(shell pwd):/workspace -w /workspace xv6-dev /bin/bash

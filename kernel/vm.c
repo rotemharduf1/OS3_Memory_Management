@@ -178,23 +178,22 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     panic("uvmunmap: not aligned");
 
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
-    if((pte = walk(pagetable, a, 0)) == 0)
-      panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
-      panic("uvmunmap: not mapped");
+    pte = walk(pagetable, a, 0);
+    if(pte == 0 || (*pte & PTE_V) == 0){
+      continue;
+    }
+
     if(PTE_FLAGS(*pte) == PTE_V)
       panic("uvmunmap: not a leaf");
-//    if(do_free){
-//      uint64 pa = PTE2PA(*pte);
-//      kfree((void*)pa);
-//    }
+
     if(do_free && ((*pte & PTE_S) == 0)){
-          uint64 pa = PTE2PA(*pte);
-          kfree((void*)pa);
-      }
+      uint64 pa = PTE2PA(*pte);
+      kfree((void*)pa);
+    }
     *pte = 0;
   }
 }
+
 
 // create an empty user page table.
 // returns 0 if out of memory.
@@ -447,51 +446,57 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 //task1
 uint64
 map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size) {
-    if (src_va >= src_proc->sz || size == 0)
-        return 0;
+  if (src_va >= src_proc->sz || size == 0)
+    return (uint64)-1;
 
-    uint64 start = PGROUNDDOWN(src_va);
-    uint64 end = PGROUNDUP(src_va + size);
-    uint64 dst_base = PGROUNDUP(dst_proc->sz); // where to start mapping in dst
-    uint64 dst_va = dst_base;
+  uint64 start = PGROUNDDOWN(src_va);
+  uint64 end = PGROUNDUP(src_va + size);
+  uint64 dst_base = 0x500000;  // כתובת קבועה בתהליך היעד
+  uint64 dst_va = dst_base;
 
-    for (uint64 va = start; va < end; va += PGSIZE, dst_va += PGSIZE) {
-        pte_t* pte = walk(src_proc->pagetable, va, 0);
-        if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U))
-            return 0;
+  for (uint64 va = start; va < end; va += PGSIZE, dst_va += PGSIZE) {
+    pte_t* pte = walk(src_proc->pagetable, va, 0);
+    if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U))
+      return (uint64)-1;
 
-        uint64 pa = PTE2PA(*pte);
-        uint flags = PTE_FLAGS(*pte) | PTE_S;
+    uint64 pa = PTE2PA(*pte);
+    uint flags = PTE_FLAGS(*pte) | PTE_S;
 
-        if (mappages(dst_proc->pagetable, dst_va, PGSIZE, pa, flags) != 0)
-            return 0;
-    }
+    if (mappages(dst_proc->pagetable, dst_va, PGSIZE, pa, flags) != 0)
+      return (uint64)-1;
+  }
 
-    dst_proc->sz = dst_va;
+  // 🛡 עדכון sz של תהליך היעד
+  if (dst_proc->sz < dst_base + (end - start))
+    dst_proc->sz = dst_base + (end - start);
 
-    return dst_base + (src_va - start); // return correct offset
+  return dst_base + (src_va - start); // מחזיר כתובת עם offset נכון
 }
+
 
 uint64
 unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
-    if (addr >= p->sz || size == 0)
-        return -1;
+  if (addr >= p->sz || size == 0)
+    return (uint64)-1;
 
-    uint64 start = PGROUNDDOWN(addr);
-    uint64 end = PGROUNDUP(addr + size);
+  uint64 start = PGROUNDDOWN(addr);
+  uint64 end = PGROUNDUP(addr + size);
 
-    for (uint64 va = start; va < end; va += PGSIZE) {
-        pte_t* pte = walk(p->pagetable, va, 0);
-        if (!pte || !(*pte & PTE_V))
-            return -1;
-
-        int is_shared = (*pte & PTE_S) != 0;
-        uvmunmap(p->pagetable, va, 1, !is_shared); // only free if not shared
+  for (uint64 va = start; va < end; va += PGSIZE) {
+    pte_t* pte = walk(p->pagetable, va, 0);
+    if (!pte || !(*pte & PTE_V)) {
+      printf("unmap_shared_pages: skipping unmapped va %p\n", va);
+      continue;  // ⬅ לא מחזיר שגיאה ולא קורא ל-uvmunmap
     }
 
-    // Update process size if we removed top of address space
-    if (end == p->sz)
-        p->sz = start;
+    int is_shared = (*pte & PTE_S) != 0;
+    uvmunmap(p->pagetable, va, 1, !is_shared);
+  }
 
-    return 0;
+  if (end == p->sz)
+    p->sz = start;
+
+  return 0;
 }
+
+

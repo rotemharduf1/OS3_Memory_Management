@@ -693,5 +693,5 @@ get_proc_by_pid(int pid) {
         }
     }
 
-    return 0; // not found
+    return 0;
 }
