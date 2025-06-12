@@ -444,21 +444,60 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 
 //task1
+
+//without locking sz
+// uint64
+// map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size) {
+//   if (src_va >= src_proc->sz || size == 0)
+//     return (uint64)-1;
+
+//   uint64 start = PGROUNDDOWN(src_va);
+//   uint64 end = PGROUNDUP(src_va + size);
+//   uint64 dst_base = start;
+
+//   uint64 num_pages = (end - start) / PGSIZE;
+
+//   uvmunmap(dst_proc->pagetable, dst_base, num_pages, 0);
+
+//   uint64 dst_va = dst_base;
+
+//   for (uint64 va = start; va < end; va += PGSIZE, dst_va += PGSIZE) {
+//     pte_t* pte = walk(src_proc->pagetable, va, 0);
+//     if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U))
+//       return (uint64)-1;
+
+//     uint64 pa = PTE2PA(*pte);
+//     uint flags = PTE_FLAGS(*pte) | PTE_S;
+
+//     if (mappages(dst_proc->pagetable, dst_va, PGSIZE, pa, flags) != 0)
+//       return (uint64)-1;
+//   }
+
+//   if (dst_proc->sz < dst_va)
+//     dst_proc->sz = dst_va;
+
+//   return src_va;
+// }
+
+//locking sz
 uint64
 map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, uint64 size) {
-  if (src_va >= src_proc->sz || size == 0)
+  // Lock source proc to read sz
+  acquire(&src_proc->lock);
+  if (src_va >= src_proc->sz || size == 0) {
+    release(&src_proc->lock);
     return (uint64)-1;
+  }
+  release(&src_proc->lock);
 
   uint64 start = PGROUNDDOWN(src_va);
   uint64 end = PGROUNDUP(src_va + size);
   uint64 dst_base = start;
-
   uint64 num_pages = (end - start) / PGSIZE;
 
   uvmunmap(dst_proc->pagetable, dst_base, num_pages, 0);
 
   uint64 dst_va = dst_base;
-
   for (uint64 va = start; va < end; va += PGSIZE, dst_va += PGSIZE) {
     pte_t* pte = walk(src_proc->pagetable, va, 0);
     if (!pte || !(*pte & PTE_V) || !(*pte & PTE_U))
@@ -471,18 +510,53 @@ map_shared_pages(struct proc* src_proc, struct proc* dst_proc, uint64 src_va, ui
       return (uint64)-1;
   }
 
+  // Lock destination proc to update sz
+  acquire(&dst_proc->lock);
   if (dst_proc->sz < dst_va)
     dst_proc->sz = dst_va;
+  release(&dst_proc->lock);
 
   return src_va;
 }
 
 
+//without locking sz
+// uint64
+// unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
+//   if (addr >= p->sz || size == 0)
+//     return (uint64)-1;
 
+//   uint64 start = PGROUNDDOWN(addr);
+//   uint64 end = PGROUNDUP(addr + size);
+
+//   for (uint64 va = start; va < end; va += PGSIZE) {
+//     pte_t* pte = walk(p->pagetable, va, 0);
+//     if (!pte || !(*pte & PTE_V)) {
+//       printf("unmap_shared_pages: skipping unmapped va %p\n", va);
+//       continue;
+//     }
+
+//     int is_shared = (*pte & PTE_S) != 0;
+//     uvmunmap(p->pagetable, va, 1, !is_shared);
+//   }
+
+//   if (end == p->sz)
+//     p->sz = start;
+
+//   return 0;
+// }
+
+
+//with locking sz
 uint64
 unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
-  if (addr >= p->sz || size == 0)
+  // Lock proc to validate sz
+  acquire(&p->lock);
+  if (addr >= p->sz || size == 0) {
+    release(&p->lock);
     return (uint64)-1;
+  }
+  release(&p->lock);
 
   uint64 start = PGROUNDDOWN(addr);
   uint64 end = PGROUNDUP(addr + size);
@@ -498,10 +572,12 @@ unmap_shared_pages(struct proc* p, uint64 addr, uint64 size) {
     uvmunmap(p->pagetable, va, 1, !is_shared);
   }
 
+  // Lock proc to update sz
+  acquire(&p->lock);
   if (end == p->sz)
     p->sz = start;
+  release(&p->lock);
 
   return 0;
 }
-
 
