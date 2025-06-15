@@ -8,37 +8,45 @@
 int map_shared_pages(void* addr, int size, int pid);
 int unmap_shared_pages(void* addr, int size);
 
-int
-main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     char *buf = SHARED_ADDR;
     int shared_size = PGSIZE;
 
     int child_pid = fork();
 
     if (child_pid == 0) {
-        sleep(10);
+        // Child process
+        uint64 before = (uint64)sbrk(0);
+        printf("child – size before mapping: %d\n", (int)before);
 
-        printf("Child: message from parent: %s\n", buf);
+        sleep(5);
+
+        uint64 after_map = (uint64)sbrk(0);
+        printf("child – size after mapping: %d\n", (int)after_map);
 
         strcpy(buf, "Hello daddy!");
-        printf("Child: wrote message\n");
 
         if (argc < 2 || strcmp(argv[1], "nounmap") != 0) {
-            uint64 current_brk = (uint64)sbrk(0);
             uint64 target_end = (uint64)SHARED_ADDR + shared_size;
-            if (current_brk < target_end)
-                sbrk(target_end - current_brk);
+            if (after_map < target_end)
+                sbrk(target_end - after_map);
 
             if (unmap_shared_pages(buf, shared_size) < 0)
-                printf("Child: unmap failed\n");
-            else
-                printf("Child: unmapped successfully\n");
+                printf("child – unmap failed\n");
+            else {
+                uint64 after_unmap = (uint64)sbrk(0);
+                printf("child – size after unmapping: %d\n", (int)after_unmap);
+            }
         }
 
-        exit(0);
+        // Try malloc to see if memory is usable again
+        malloc(1);
+        uint64 after_malloc = (uint64)sbrk(0);
+        printf("child – size after malloc: %d\n", (int)after_malloc);
 
+        exit(0);
     } else {
+        // Parent process
         uint64 current_brk = (uint64)sbrk(0);
         uint64 target_end = (uint64)SHARED_ADDR + shared_size;
         if (current_brk < target_end)
@@ -54,12 +62,9 @@ main(int argc, char *argv[])
         }
 
         strcpy(buf, "Hi child!");
-        printf("Parent: wrote message\n");
 
         wait(0);
-
-        printf("Parent: child exited\n");
-        printf("Parent: message from child: %s\n", buf);
+        printf("parent – read from shared memory: %s\n", buf);
     }
 
     exit(0);

@@ -1,214 +1,97 @@
-// #include "kernel/types.h"
-// #include "kernel/stat.h"
-// #include "user/user.h"
-
-// #define PGSIZE 4096
-// #define SHARED_ADDR ((char*)0x800000)
-// #define MAX_CHILDREN 4
-// #define HEADER_SIZE 4
-
-// int map_shared_pages(void* addr, int size, int pid);
-
-// void write_log(char *buffer, int child_index, const char *message) {
-//     int len = strlen(message);
-//     char *p = buffer;
-
-//     while (1) {
-//         p = (char*)(((uint64)p + 3) & ~3);  // align to 4 bytes
-
-//         if ((p + HEADER_SIZE + len) >= buffer + PGSIZE)
-//             break;
-
-//         uint32 *header = (uint32*)p;
-//         uint32 new_header = (child_index << 16) | len;
-
-//         if (__sync_val_compare_and_swap(header, 0, new_header) == 0) {
-//             memmove(p + HEADER_SIZE, message, len);
-//             break;
-//         } else {
-//             p += HEADER_SIZE + len;
-//         }
-//     }
-
-//     exit(0);
-// }
-
-// // Parent reads messages from buffer
-// void read_logs(char *buffer) {
-//     char *p = buffer;
-
-//     while (p < buffer + PGSIZE) {
-//         p = (char*)(((uint64)p + 3) & ~3);
-
-//         uint32 header = *(uint32*)p;
-//         if (header == 0)
-//             break;
-
-//         int index = header >> 16;
-//         int len = header & 0xFFFF;
-
-//         printf("From child %d: ", index);
-//         write(1, p + HEADER_SIZE, len);
-//         write(1, "\n", 1);
-
-//         p += HEADER_SIZE + len;
-//     }
-// }
-
-// int
-// main(int argc, char *argv[])
-// {
-//     char *shared = SHARED_ADDR;
-
-//     uint64 current_brk = (uint64)sbrk(0);
-//     uint64 target = (uint64)shared + PGSIZE;
-//     if (current_brk < target)
-//         sbrk(target - current_brk);
-//     memset(shared, 0, PGSIZE);
-
-//     for (int i = 0; i < MAX_CHILDREN; i++) {
-//         int pid = fork();
-//         if (pid == 0) {
-//             sleep(10);
-//             write_log(shared, i, "Hello from child");
-//         } else {
-//             if (map_shared_pages(shared, PGSIZE, pid) == (uint64)-1) {
-//                 printf("Mapping to child %d failed\n", pid);
-//                 kill(pid);
-//             }
-//         }
-//     }
-
-//     for (int i = 0; i < MAX_CHILDREN; i++)
-//         wait(0);
-
-//     read_logs(shared);
-//     exit(0);
-// }
-
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "user/user.h"
 
 #define PGSIZE 4096
-#define SHARED_ADDR ((char*)0x800000)
-#define MAX_CHILDREN 4
 #define HEADER_SIZE 4
+#define MAX_CHILDREN 7
 
 // user syscall
 int map_shared_pages(void* addr, int size, int pid);
 
-// Build message like: "Hello from child 3 (127)"
-void make_msg(char *buf, int child_index, int count) {
+void make_msg(char *buf, int child_index, int num) {
+  char numbuf[16];
   char *p = buf;
 
-  // Fixed prefix
-  strcpy(p, "Hello from child ");
+  strcpy(p, "Child ");
   p += strlen(p);
-
-  // Add child index
   *p++ = '0' + child_index;
 
-  // Optional counter
-  if (count >= 0) {
-    *p++ = ' ';
-    *p++ = '(';
+  strcpy(p, " msg 0 says hello #");
+  p += strlen(p);
 
-    // Convert integer to string
-    char tmp[6];
-    int i = 0;
-    do {
-      tmp[i++] = '0' + (count % 10);
-      count /= 10;
-    } while (count > 0);
+  int i = 0;
+  do {
+    numbuf[i++] = '0' + (num % 10);
+    num /= 10;
+  } while (num > 0);
 
-    for (int j = i - 1; j >= 0; j--)
-      *p++ = tmp[j];
-
-    *p++ = ')';
+  while (i-- > 0) {
+    *p++ = numbuf[i];
   }
 
   *p = '\0';
 }
 
-// Each child writes a log entry into shared buffer
-void write_log(char *buffer, int child_index, const char *message) {
-  int len = strlen(message);
-  char *p = buffer;
+void write_log(char *buffer, int child_index, int num) {
+  char msg[64];
+  make_msg(msg, child_index, num);
+  int len = strlen(msg);
+  int i = 0;
 
-  while (1) {
-    p = (char*)(((uint64)p + 3) & ~3);  // align to 4 bytes
+  while (i + HEADER_SIZE + len <= PGSIZE) {
+    i = (i + 3) & ~3; // Align to 4 bytes
 
-    if ((p + HEADER_SIZE + len) >= buffer + PGSIZE)
+    if (i + HEADER_SIZE + len > PGSIZE)
       break;
 
-    uint32 *header = (uint32*)p;
+    uint32 *header = (uint32*)(buffer + i);
     uint32 new_header = (child_index << 16) | len;
 
     if (__sync_val_compare_and_swap(header, 0, new_header) == 0) {
-      memmove(p + HEADER_SIZE, message, len);
+      memmove((char*)header + HEADER_SIZE, msg, len);
       break;
     } else {
       int old_len = (*header) & 0xFFFF;
-      p += HEADER_SIZE + old_len;
+      i += HEADER_SIZE + old_len;
     }
   }
 }
 
-// Parent reads and prints all logs from shared buffer
 void read_logs(char *buffer) {
   char *p = buffer;
 
-  while (p < buffer + PGSIZE) {
-    p = (char*)(((uint64)p + 3) & ~3);
+  while ((p - buffer) + HEADER_SIZE <= PGSIZE) {
+    p = (char*)(((uint64)p + 3) & ~3); // Align
     uint32 header = *(uint32*)p;
+
     if (header == 0)
       break;
 
     int index = header >> 16;
     int len = header & 0xFFFF;
 
-    printf("From child %d: ", index);
+    printf("From child %d: \"", index);
     write(1, p + HEADER_SIZE, len);
-    write(1, "\n", 1);
+    printf("\"\n");
 
     p += HEADER_SIZE + len;
   }
 }
 
 int main(int argc, char *argv[]) {
-  char *shared = SHARED_ADDR;
-
-  // Allocate 1 page for shared buffer
-  uint64 current_brk = (uint64)sbrk(0);
-  uint64 target = (uint64)shared + PGSIZE;
-  if (current_brk < target)
-    sbrk(target - current_brk);
+  char *shared = (char*) sbrk(PGSIZE);
   memset(shared, 0, PGSIZE);
 
   for (int i = 0; i < MAX_CHILDREN; i++) {
     int pid = fork();
     if (pid == 0) {
-      sleep(10); // let parent finish mapping
-
-      if (i == MAX_CHILDREN - 1) {
-        // Last child fills the buffer
-        for (int j = 0; j < 1000; j++) {
-          char msg[64];
-          make_msg(msg, i, j);
-          write_log(shared, i, msg);
-        }
-      } else {
-        // Other children write one message
-        char msg[64];
-        make_msg(msg, i, -1);
-        write_log(shared, i, msg);
-      }
-
+      sleep(5);  // Let parent finish mapping
+      write_log(shared, i, (i + 1) * 2726);  // Unique number per child
       exit(0);
     } else {
       if (map_shared_pages(shared, PGSIZE, pid) == (uint64)-1) {
-        printf("Mapping to child %d failed\n", pid);
+        printf("Mapping to child %d failed\n", i);
         kill(pid);
       }
     }
@@ -220,5 +103,3 @@ int main(int argc, char *argv[]) {
   read_logs(shared);
   exit(0);
 }
-
-
